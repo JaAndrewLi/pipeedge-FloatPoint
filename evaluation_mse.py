@@ -171,7 +171,7 @@ if __name__ == "__main__":
     dset = parser.add_argument_group('Dataset arguments')
     dset.add_argument("--dataset-name", type=str, default='ImageNet', choices=['CoLA', 'ImageNet'],
                       help="dataset to use")
-    dset.add_argument("--dataset-root", type=str, default= "/project/jpwalter_148/hnwang/datasets/ImageNet/",
+    dset.add_argument("--dataset-root", type=str, default= "/project/jpwalter_148/hnwang/datasets/ImageNet/val/",
                       help="dataset root directory (e.g., for 'ImageNet', must contain "
                            "'ILSVRC2012_devkit_t12.tar.gz' and at least one of: "
                            "'ILSVRC2012_img_train.tar', 'ILSVRC2012_img_val.tar'")

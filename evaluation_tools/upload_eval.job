@@ -8,5 +8,6 @@
 #SBATCH --account=jpwalter_148
 
 # conda activate primary
-cd /home1/zeliliu/pipeedge/pipeedge-FloatPoint
-python evaluation.py -n 32 -pt $1 -q $2,$2
+cd /home1/weixili/ondemand/data/pipeedge-FloatPoint
+# python evaluation.py -n 32 -pt $1 -q $2,$2
+python evaluation_adaptiv.py -n 32 -pt $1 -q $2,$2

@@ -16,9 +16,14 @@ from transformers import AutoTokenizer, DeiTFeatureExtractor, ViTFeatureExtracto
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge import models
-from pipeedge.quantization.basic_op import (
+# from pipeedge.quantization.basic_op import (
+#     compression_factor, tensor_encode_outerdim, tensor_decode_outerdim
+# )
+
+from pipeedge.quantization.adaptiv_op import (
     compression_factor, tensor_encode_outerdim, tensor_decode_outerdim
 )
+
 from pipeedge.quantization.clamp_op import clamp_banner2019_gelu, clamp_banner2019_laplace
 from pipeedge.sched.scheduler import sched_pipeline
 import devices
@@ -70,7 +75,28 @@ def forward_hook_monitor(module, _inputs, outputs) -> None:
     n_layers = module.shard_config.layer_end - module.shard_config.layer_start + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
 
-def forward_hook_quant_encode(module, _input_arg, output: Union[torch.Tensor, Tuple[torch.Tensor, ...]]):
+# def forward_hook_quant_encode(module, _input_arg, output: Union[torch.Tensor, Tuple[torch.Tensor, ...]]):
+#     """encode tensor in the forward hook (after each module)"""
+#     monitoring.iteration_start(MONITORING_KEY_QUANT_ENCODE)
+#     if isinstance(output, torch.Tensor):
+#         output = (output,)
+#     assert isinstance(output, tuple)
+#     quant_bit = module.quant_bit.item()
+#     comm_tuple = []
+#     for tensor in output:
+#         assert isinstance(tensor, torch.Tensor)
+#         # noClamp if comment these three lines below (from 84 to 86)
+#         if quant_bit > 0:
+#             clamp = clamp_banner2019_laplace if tensor.min() < 0.2 else clamp_banner2019_gelu
+#             tensor = clamp(tensor, quant_bit)
+#         stacked_tensor = tensor_encode_outerdim(tensor, quant_bit)
+#         comm_tuple += stacked_tensor
+#     # Measure work as the microbatch size, but quantization only does work if quant_bit > 0.
+#     n_items = models.get_microbatch_size(output[0], verify=True) if quant_bit > 0 else 0
+#     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bit)
+#     return tuple(comm_tuple)
+
+def forward_hook_quant_encode(module, _input_arg, e, output: Union[torch.Tensor, Tuple[torch.Tensor, ...]]):
     """encode tensor in the forward hook (after each module)"""
     monitoring.iteration_start(MONITORING_KEY_QUANT_ENCODE)
     if isinstance(output, torch.Tensor):
@@ -84,12 +110,13 @@ def forward_hook_quant_encode(module, _input_arg, output: Union[torch.Tensor, Tu
         if quant_bit > 0:
             clamp = clamp_banner2019_laplace if tensor.min() < 0.2 else clamp_banner2019_gelu
             tensor = clamp(tensor, quant_bit)
-        stacked_tensor = tensor_encode_outerdim(tensor, quant_bit)
+        stacked_tensor = tensor_encode_outerdim(tensor, quant_bit, e)
         comm_tuple += stacked_tensor
     # Measure work as the microbatch size, but quantization only does work if quant_bit > 0.
     n_items = models.get_microbatch_size(output[0], verify=True) if quant_bit > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bit)
     return tuple(comm_tuple)
+
 
 def forward_pre_hook_quant_decode(_module, input_arg: Tuple[Tuple[torch.Tensor, ...]]):
     """decode tensor in the preforward hook (before each module)"""

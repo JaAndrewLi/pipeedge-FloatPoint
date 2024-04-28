@@ -33,7 +33,9 @@ class ReportAccuracy():
 
     def report(self,):
         print(f"The accuracy so far is: {100*self.total_acc:.2f}")
-        file_name = os.path.join(self.output_dir, self.model_name, "result_"+self.partition+"_"+str(self.quant)+"_e"+self.e+".txt")
+        # file_name = os.path.join(self.output_dir, self.model_name, "result_"+self.partition+"_"+str(self.quant)+"_e"+self.e+".txt")
+        file_name = os.path.join(self.output_dir, self.model_name, f"b{self.quant}_adaptiv_noClamp_{self.partition[1]}_exp{self.e}.txt")
+        # file_name = os.path.join(self.output_dir, self.model_name, f"b{self.quant}_adaptiv_withClamp_{self.partition[1]}_exp{self.e}.txt")
         os.makedirs(os.path.dirname(file_name), exist_ok=True)
         with open(file_name, 'a') as f:
             f.write(f"{100*self.total_acc:.2f}\n")

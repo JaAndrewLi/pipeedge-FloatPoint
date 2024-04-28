@@ -12,62 +12,38 @@ from utils.data import ViTFeatureExtractorTransforms
 import model_cfg
 from evaluation_tools.evaluation_quant_test import *
 
-class ReportAccuracy():
-    def __init__(self, batch_size, output_dir, model_name, partition, quant) -> None:
-        self.current_acc = 0.0
-        self.total_acc = 0.0
-        self.correct = 0
-        self.tested_batch = 0
-        self.batch_size = batch_size
-        self.output_dir = output_dir
-        self.partition = partition
-        self.quant = quant
-        self.model_name = model_name.split('/')[1]
-
-    def update(self, pred, target):
-        self.correct = pred.eq(target.view(1, -1).expand_as(pred)).float().sum()
-        self.current_acc = self.correct / self.batch_size
-        self.total_acc = (self.total_acc * self.tested_batch + self.current_acc)/(self.tested_batch+1)
-        self.tested_batch += 1
-
-    def report(self,):
-        print(f"The accuracy so far is: {100*self.total_acc:.2f}")
-        file_name = os.path.join(self.output_dir, self.model_name, "result_"+self.partition+"_"+str(self.quant)+".txt")
-        os.makedirs(os.path.dirname(file_name), exist_ok=True)
-        with open(file_name, 'a') as f:
-            f.write(f"{100*self.total_acc:.2f}\n")
-
-def _make_shard(model_name, model_file, stage_layers, stage, q_bits):
-    shard = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
-                                            stage_layers[stage][1], stage)
-    shard.register_buffer('quant_bits', q_bits)
+def _make_shard(model_name, model_file, stage_layers, stage):
+    shard = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage],
+                                           stage_layers[stage], stage)
+    # shard.register_buffer('quant_bits', q_bits)
     shard.eval()
     return shard
 
-def _forward_model(input_tensor, model_shards):
+def _forward_model(input_tensor, model_shards, batch_idx):
     num_shards = len(model_shards)
+    print(f"num_shards: {num_shards}")
     temp_tensor = input_tensor
+
     for idx in range(num_shards):
+        print(f"layer_id: {idx + 1}")
         shard = model_shards[idx]
-
-        # decoder
-        if idx != 0:
-            temp_tensor = forward_pre_hook_quant_decode(shard, temp_tensor)
-
-        # forward
-        if isinstance(temp_tensor[0], tuple) and len(temp_tensor[0]) == 2:
-            temp_tensor = temp_tensor[0]
-        elif isinstance(temp_tensor, tuple) and isinstance(temp_tensor[0], torch.Tensor):
-            temp_tensor = temp_tensor[0]
         temp_tensor = shard(temp_tensor)
+        print(f"the type of temp_tensor: {type(temp_tensor)}")
 
-        # encoder
-        if idx != num_shards-1:
-            temp_tensor = (forward_hook_quant_encode(shard, None, temp_tensor),)
+        if isinstance(temp_tensor, torch.Tensor):
+            temp_tensor_st = temp_tensor
+        elif isinstance(temp_tensor, tuple) and isinstance(temp_tensor[0], torch.Tensor):
+            temp_tensor_st = temp_tensor[0]
+        print(f"the shape of output: {temp_tensor_st.shape}")
+        
+        numpy_array = temp_tensor_st.cpu().numpy()
+        file_name = f"result/original_data/batch_{batch_idx + 1}/layer_{idx + 1}_x.npy"
+        os.makedirs(os.path.dirname(file_name), exist_ok=True)
+        np.save(file_name, numpy_array)
+
     return temp_tensor
 
 def evaluation(args):
-    """ Evaluation main func"""
     # localize parameters
     dataset_path = args.dataset_root
     dataset_split = args.dataset_split
@@ -81,8 +57,6 @@ def evaluation(args):
     model_file = args.model_file
     num_stop_batch = args.stop_at_batch
     is_clamp = True
-    # if model_file is None:
-    #     model_file = model_cfg.get_model_default_weights_file(model_name)
 
     # load dataset
     if model_name in ['facebook/deit-base-distilled-patch16-224',
@@ -93,9 +67,8 @@ def evaluation(args):
         feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
     val_transform = ViTFeatureExtractorTransforms(feature_extractor)
     
-    # val_dataset = ImageFolder(os.path.join(dataset_path, dataset_split),
-    #                         transform = val_transform)
-    val_dataset = ImageFolder(dataset_path,transform = val_transform)
+    val_dataset = ImageFolder(os.path.join(dataset_path, dataset_split),
+                            transform = val_transform)
     val_loader = DataLoader(
         val_dataset,
         batch_size = batch_size,
@@ -103,41 +76,30 @@ def evaluation(args):
         shuffle=True,
         pin_memory=True
     )
-    
+
     # model config
-    def _get_default_quant(n_stages: int) -> List[int]:
-        return [0] * n_stages
-    parts = [int(i) for i in partition.split(',')]
-    assert len(parts) % 2 == 0
-    num_shards = len(parts)//2
-    stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
-    stage_quant = [int(i) for i in quant.split(',')] if quant else _get_default_quant(len(stage_layers))
+    parts = [int(i) for i in range(1, int(partition) + 1)]
+    # assert len(parts) % 2 == 0
+    num_shards = len(parts)
+    stage_layers = [i for i in range(1, len(parts) + 1)]
 
     # model construct
     model_shards = []
-    q_bits = []
+    # q_bits = []
     for stage in range(num_shards):
-        q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
-        model_shards.append(_make_shard(model_name, model_file, stage_layers, stage, q_bits))
-        model_shards[-1].register_buffer('quant_bit', torch.tensor(stage_quant[stage]), persistent=False)
-
-
-    # run inference
+        model_shards.append(_make_shard(model_name, model_file, stage_layers, stage))
+        
+     # run inference
     start_time = time.time()
-    acc_reporter = ReportAccuracy(batch_size, output_dir, model_name, partition, stage_quant[0])
     with torch.no_grad():
-        for batch_idx, (input, target) in enumerate(val_loader):
+        for batch_idx, (input, _) in enumerate(val_loader):
             if batch_idx == num_stop_batch and num_stop_batch:
                 break
-            output = _forward_model(input, model_shards)
-            _, pred = output.topk(1)
-            pred = pred.t()
-            acc_reporter.update(pred, target)
-            acc_reporter.report()
-    print(f"Final Accuracy: {100*acc_reporter.total_acc}; Quant Bitwidth: {stage_quant}")
+            if batch_idx > 9:
+                break
+            output = _forward_model(input, model_shards, batch_idx)
     end_time = time.time()
     print(f"total time = {end_time - start_time}")
-
 
 if __name__ == "__main__":
     """Main function."""
@@ -146,14 +108,14 @@ if __name__ == "__main__":
     # Eval configs
     parser.add_argument("-q", "--quant", type=str,
                         help="comma-delimited list of quantization bits to use after each stage")
-    parser.add_argument("-pt", "--partition", type=str, default= '1,22,23,48',
+    parser.add_argument("-pt", "--partition", type=str, default= '48',
                         help="comma-delimited list of start/end layer pairs, e.g.: '1,24,25,48'; "
                              "single-node default: all layers in the model")
     parser.add_argument("-o", "--output-dir", type=str, default="result/")
     parser.add_argument("-st", "--stop-at-batch", type=int, default=None, help="the # of batch to stop evaluation")
     
     # Device options
-    parser.add_argument("-d", "--device", type=str, default=None,
+    parser.add_argument("-d", "--device", type=str, default='cuda',
                         help="compute device type to use, with optional ordinal, "
                              "e.g.: 'cpu', 'cuda', 'cuda:1'")
     parser.add_argument("-n", "--num-workers", default=16, type=int,
@@ -171,11 +133,11 @@ if __name__ == "__main__":
     dset = parser.add_argument_group('Dataset arguments')
     dset.add_argument("--dataset-name", type=str, default='ImageNet', choices=['CoLA', 'ImageNet'],
                       help="dataset to use")
-    dset.add_argument("--dataset-root", type=str, default= "/project/jpwalter_148/hnwang/datasets/ImageNet/val/",
+    dset.add_argument("--dataset-root", type=str, default= "ImageNet/",
                       help="dataset root directory (e.g., for 'ImageNet', must contain "
                            "'ILSVRC2012_devkit_t12.tar.gz' and at least one of: "
                            "'ILSVRC2012_img_train.tar', 'ILSVRC2012_img_val.tar'")
-    dset.add_argument("--dataset-split", default='val', type=str,
+    dset.add_argument("--dataset-split", default='ILSVRC2012_img_val/', type=str,
                       help="dataset split (depends on dataset), e.g.: train, val, validation, test")
     dset.add_argument("--dataset-indices-file", default=None, type=str,
                       help="PyTorch or NumPy file with precomputed dataset index sequence")

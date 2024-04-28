@@ -164,7 +164,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num-workers", default=16, type=int,
                         help="the number of worker threads for the dataloder")
     # Model options
-    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-large-patch16-224",
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str,
